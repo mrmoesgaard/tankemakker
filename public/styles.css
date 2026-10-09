@@ -194,3 +194,35 @@ label.button-like { display: inline-block; font-weight: normal; }
 .thread-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
 .empty { color: var(--muted); text-align: center; margin-top: 40px; }
+
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.key-status { margin: 0; font-weight: 600; }
+button[type="submit"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+h3 { margin: 10px 0 0; }
+
+body.locked header, body.locked main { visibility: hidden; }
+
+.lock {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.lock[hidden] { display: none; }
+
+.lock-box {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+  align-items: stretch;
+}
+.lock-box img { align-self: center; border-radius: 16px; }
+.lock-box h2 { margin: 0 0 6px; font-size: 1.2rem; }
+
+.link { background: none; border: none; color: var(--accent); text-decoration: underline; font-size: 0.9rem; }

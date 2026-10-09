@@ -2,7 +2,8 @@ const DATA_KEY = "tankemakker.data.v1";
 const SETTINGS_KEY = "tankemakker.settings.v1";
 
 const DEFAULT_SETTINGS = {
-  apiKey: "",
+  apiKey: "", // only used when no password is set
+  encryptedKey: null, // { salt, iv, data } when the key is locked with a password
   model: "claude-opus-5-5",
   voiceURI: "",
   conversationMode: true,

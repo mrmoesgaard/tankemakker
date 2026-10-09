@@ -45,10 +45,22 @@
     </section>
 
     <section id="view-settings" class="view" hidden>
-      <label>API-nøgle fra Anthropic
-        <input id="api-key" type="password" placeholder="sk-ant-…" autocomplete="off">
-      </label>
-      <p class="hint">Opret en nøgle på console.anthropic.com under "API Keys". Nøglen gemmes kun på denne telefon.</p>
+      <h3>API-nøgle</h3>
+      <p id="key-status" class="key-status"></p>
+      <form id="key-form" class="stack">
+        <label>Ny API-nøgle fra Anthropic
+          <input id="api-key" type="password" placeholder="sk-ant-… (lad stå tom for at beholde den gemte)" autocomplete="off">
+        </label>
+        <label>Adgangskode til appen
+          <input id="key-password" type="password" placeholder="Anbefales – mindst 4 tegn" autocomplete="new-password">
+        </label>
+        <p class="hint">Med en adgangskode gemmes nøglen krypteret, og appen beder om koden, hver gang den er blevet lukket. Opret nøglen på console.anthropic.com under "API Keys". Den gemmes kun på denne telefon.</p>
+        <div class="row">
+          <button type="submit">Gem</button>
+          <button id="lock-now" class="small" type="button" hidden>Lås appen nu</button>
+        </div>
+        <p id="key-message" class="hint" aria-live="polite"></p>
+      </form>
 
       <label>AI-model
         <select id="model"></select>
@@ -70,6 +82,17 @@
       </div>
     </section>
   </main>
+
+  <div id="lock" class="lock" hidden>
+    <form id="unlock-form" class="lock-box">
+      <img src="icon.svg" alt="" width="72" height="72">
+      <h2>Tankemakker er låst</h2>
+      <input id="unlock-password" type="password" placeholder="Adgangskode" autocomplete="current-password" aria-label="Adgangskode">
+      <button type="submit">Lås op</button>
+      <p id="unlock-message" class="hint" aria-live="polite"></p>
+      <button id="forgot" class="link" type="button">Glemt adgangskoden?</button>
+    </form>
+  </div>
 
   <script src="app.js"></script>
 </body>

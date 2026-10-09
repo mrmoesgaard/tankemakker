@@ -1,11 +1,13 @@
 import { askAssistant, describeError, MODELS } from "./ai.js";
 import { applyActions, loadData, loadSettings, saveData, saveSettings } from "./store.js";
+import { decryptSecret, encryptSecret, forgetUnlocked, recallUnlocked, rememberUnlocked } from "./lock.js";
 import { canListen, canSpeak, getDanishVoices, listenOnce, speak, stopListening, stopSpeaking } from "./speech.js";
 
 const $ = (sel) => document.querySelector(sel);
 
 let data = loadData();
 let settings = loadSettings();
+let apiKey = settings.encryptedKey ? recallUnlocked() : settings.apiKey;
 let undoStack = [];
 let dialog = [];
 let lastTurnAt = 0;
@@ -77,7 +79,7 @@ async function handleUtterance(text, mySession) {
     return { reply, expectsAnswer: false };
   }
 
-  if (!settings.apiKey) {
+  if (!apiKey) {
     const reply = "Du mangler at indtaste en API-nøgle under Indstillinger.";
     showReply(reply);
     return { reply, expectsAnswer: false };
@@ -85,7 +87,7 @@ async function handleUtterance(text, mySession) {
 
   setStatus("Tænker…", "thinking");
   const result = await askAssistant({
-    apiKey: settings.apiKey,
+    apiKey,
     model: settings.model,
     threads: data.threads,
     dialog,
@@ -311,7 +313,13 @@ $("#show-archived").onchange = renderThreads;
 // ---------- Settings view ----------
 
 function renderSettings() {
-  $("#api-key").value = settings.apiKey;
+  $("#key-status").textContent = settings.encryptedKey
+    ? "✓ Nøglen er gemt og låst med din adgangskode."
+    : settings.apiKey
+      ? "Nøglen er gemt, men uden adgangskode."
+      : "Ingen nøgle gemt endnu.";
+  $("#lock-now").hidden = !settings.encryptedKey;
+  $("#key-message").textContent = "";
   $("#conversation-mode").checked = settings.conversationMode;
 
   $("#model").innerHTML = "";
@@ -332,7 +340,34 @@ function updateSettings(patch) {
   saveSettings(settings);
 }
 
-$("#api-key").onchange = (e) => updateSettings({ apiKey: e.target.value.trim() });
+$("#key-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const newKey = $("#api-key").value.trim() || apiKey;
+  const password = $("#key-password").value;
+  if (!newKey) {
+    $("#key-message").textContent = "Indsæt først din API-nøgle.";
+    return;
+  }
+  if (password && password.length < 4) {
+    $("#key-message").textContent = "Adgangskoden skal være på mindst 4 tegn.";
+    return;
+  }
+  if (password) {
+    updateSettings({ apiKey: "", encryptedKey: await encryptSecret(newKey, password) });
+    rememberUnlocked(newKey);
+  } else {
+    updateSettings({ apiKey: newKey, encryptedKey: null });
+    forgetUnlocked();
+  }
+  apiKey = newKey;
+  $("#api-key").value = "";
+  $("#key-password").value = "";
+  renderSettings();
+  $("#key-message").textContent = "Gemt.";
+};
+
+$("#lock-now").onclick = lockApp;
+
 $("#model").onchange = (e) => updateSettings({ model: e.target.value });
 $("#voice").onchange = (e) => updateSettings({ voiceURI: e.target.value });
 $("#conversation-mode").onchange = (e) => updateSettings({ conversationMode: e.target.checked });
@@ -384,10 +419,49 @@ if (!canListen) {
   setStatus("Tryk for at tale", "idle");
 }
 
-renderThreads();
-showView(settings.apiKey ? "talk" : "settings");
+// ---------- Lock screen ----------
+
+function lockApp() {
+  cancelConversation();
+  forgetUnlocked();
+  apiKey = "";
+  $("#unlock-password").value = "";
+  $("#unlock-message").textContent = "";
+  document.body.classList.add("locked");
+  $("#lock").hidden = false;
+  $("#unlock-password").focus();
+}
+
+function start() {
+  document.body.classList.remove("locked");
+  $("#lock").hidden = true;
+  renderThreads();
+  showView(apiKey ? "talk" : "settings");
+  // Opened via the "Tal nu" shortcut: start listening straight away.
+  if (canListen && apiKey && new URLSearchParams(location.search).has("lyt")) conversation();
+}
+
+$("#unlock-form").onsubmit = async (event) => {
+  event.preventDefault();
+  $("#unlock-message").textContent = "Låser op…";
+  const key = await decryptSecret(settings.encryptedKey, $("#unlock-password").value);
+  if (!key) {
+    $("#unlock-message").textContent = "Forkert adgangskode.";
+    $("#unlock-password").select();
+    return;
+  }
+  apiKey = key;
+  rememberUnlocked(key);
+  start();
+};
+
+$("#forgot").onclick = () => {
+  if (!confirm("Fjern den gemte API-nøgle? Dine tråde bliver ikke slettet, men du skal indsætte nøglen igen.")) return;
+  updateSettings({ apiKey: "", encryptedKey: null });
+  start();
+};
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
-// Opened via the "Tal nu" shortcut: start listening straight away.
-if (canListen && settings.apiKey && new URLSearchParams(location.search).has("lyt")) conversation();
+if (settings.encryptedKey && !apiKey) lockApp();
+else start();
