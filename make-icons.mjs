@@ -1,5 +1,5 @@
 // Draws the app icon (same design as public/icon.svg) into PNG files without extra dependencies.
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
 const BLUE = [47, 91, 211];
@@ -84,4 +84,17 @@ function png(size) {
 }
 
 for (const size of [192, 512]) writeFileSync(`public/icon-${size}.png`, png(size));
+
+// Android launcher icons, if the Android project exists.
+const res = "android/app/src/main/res";
+if (existsSync(res)) {
+  const densities = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
+  for (const [density, size] of Object.entries(densities)) {
+    mkdirSync(`${res}/mipmap-${density}`, { recursive: true });
+    for (const name of ["ic_launcher", "ic_launcher_round"]) writeFileSync(`${res}/mipmap-${density}/${name}.png`, png(size));
+    rmSync(`${res}/mipmap-${density}/ic_launcher_foreground.png`, { force: true });
+  }
+  // Use the plain PNG icons instead of Capacitor's default adaptive icon.
+  rmSync(`${res}/mipmap-anydpi-v26`, { recursive: true, force: true });
+}
 console.log("Ikoner lavet");

@@ -37,6 +37,11 @@
     </section>
 
     <section id="view-threads" class="view" hidden>
+      <div id="reminders" class="reminders-box" hidden>
+        <h3>Påmindelser</h3>
+        <ul id="reminder-list" class="reminders"></ul>
+        <p id="home-missing" class="hint" hidden>Du har påmindelser til, når du kommer hjem, men appen ved ikke, hvor du bor endnu. <button id="home-missing-go" class="link" type="button">Indstil hjem</button></p>
+      </div>
       <div class="thread-tools">
         <input id="search" type="search" placeholder="Søg i trådene">
         <label class="inline"><input id="show-archived" type="checkbox"> Vis arkiverede</label>
@@ -45,16 +50,19 @@
     </section>
 
     <section id="view-settings" class="view" hidden>
-      <h3>API-nøgle</h3>
+      <h3>Nøgler</h3>
       <p id="key-status" class="key-status"></p>
       <form id="key-form" class="stack">
-        <label>Ny API-nøgle fra Anthropic
-          <input id="api-key" type="password" placeholder="sk-ant-… (lad stå tom for at beholde den gemte)" autocomplete="off">
+        <label>API-nøgle fra Anthropic
+          <input id="api-key" type="password" placeholder="sk-ant-… (tom = behold den gemte)" autocomplete="off">
+        </label>
+        <label>Azure-nøgle til stemmen (valgfri)
+          <input id="azure-key" type="password" placeholder="Key 1 fra Azure (tom = behold den gemte)" autocomplete="off">
         </label>
         <label>Adgangskode til appen
           <input id="key-password" type="password" placeholder="Anbefales – mindst 4 tegn" autocomplete="new-password">
         </label>
-        <p class="hint">Med en adgangskode gemmes nøglen krypteret, og appen beder om koden, hver gang den er blevet lukket. Opret nøglen på console.anthropic.com under "API Keys". Den gemmes kun på denne telefon.</p>
+        <p class="hint">Med en adgangskode gemmes nøglerne krypteret, og appen beder om koden, hver gang den er blevet lukket. Nøglerne gemmes kun på denne telefon.</p>
         <div class="row">
           <button type="submit">Gem</button>
           <button id="lock-now" class="small" type="button" hidden>Lås appen nu</button>
@@ -62,16 +70,44 @@
         <p id="key-message" class="hint" aria-live="polite"></p>
       </form>
 
-      <label>AI-model
-        <select id="model"></select>
+      <h3>Stemme</h3>
+      <label>Hvem skal tale?
+        <select id="tts-provider">
+          <option value="device">Telefonens egen stemme</option>
+          <option value="azure">Azure (naturlig stemme)</option>
+        </select>
       </label>
-
-      <label>Stemme
+      <div id="azure-settings" class="stack" hidden>
+        <label>Azure-stemme
+          <select id="azure-voice"></select>
+        </label>
+        <label>Azure-region
+          <select id="azure-region">
+            <option value="northeurope">North Europe</option>
+            <option value="westeurope">West Europe</option>
+            <option value="swedencentral">Sweden Central</option>
+          </select>
+        </label>
+      </div>
+      <label id="device-voice-row">Telefonstemme
         <select id="voice"></select>
       </label>
       <button id="test-voice" class="small" type="button">Afprøv stemmen</button>
-
       <label class="inline"><input id="conversation-mode" type="checkbox"> Samtaletilstand: bliv ved med at lytte efter hvert svar, indtil jeg siger "stop"</label>
+
+      <h3>Hjem</h3>
+      <p id="home-status" class="hint"></p>
+      <div class="row">
+        <button id="home-set" class="small" type="button">Jeg er hjemme nu</button>
+        <button id="home-clear" class="small danger" type="button" hidden>Glem hjem</button>
+        <button id="location-permission" class="small" type="button" hidden>Giv adgang til placering</button>
+      </div>
+      <p class="hint">Bruges til påmindelser som "mind mig om det, når jeg er hjemme". Din position gemmes kun på telefonen.</p>
+
+      <h3>AI-model</h3>
+      <label>Model
+        <select id="model"></select>
+      </label>
 
       <h3>Dine data</h3>
       <p class="hint">Trådene gemmes kun på denne telefon. Tag en sikkerhedskopi en gang imellem.</p>

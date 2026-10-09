@@ -1,0 +1,14 @@
+{
+  "appId": "dk.roennemoesgaard.tankemakker",
+  "appName": "Tankemakker",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_mic",
+      "iconColor": "#2F5BD3"
+    }
+  }
+}

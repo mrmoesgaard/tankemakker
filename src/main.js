@@ -1,22 +1,72 @@
+import { App } from "@capacitor/app";
 import { askAssistant, describeError, MODELS } from "./ai.js";
-import { applyActions, loadData, loadSettings, saveData, saveSettings } from "./store.js";
+import { applyActions, describeWhen, loadData, loadSettings, migrateData, saveData, saveSettings } from "./store.js";
 import { decryptSecret, encryptSecret, forgetUnlocked, recallUnlocked, rememberUnlocked } from "./lock.js";
-import { canListen, canSpeak, getDanishVoices, listenOnce, speak, stopListening, stopSpeaking } from "./speech.js";
+import { AZURE_VOICES, canListen, canSpeak, getDanishVoices, listen, speak, stopListening, stopSpeaking } from "./speech.js";
+import { collectFired, getCurrentPosition, isNative, requestNativePermissions, syncReminders } from "./reminders.js";
 
 const $ = (sel) => document.querySelector(sel);
 
 let data = loadData();
 let settings = loadSettings();
-let apiKey = settings.encryptedKey ? recallUnlocked() : settings.apiKey;
+let secrets = { apiKey: "", azureKey: "" };
 let undoStack = [];
 let dialog = [];
 let lastTurnAt = 0;
 let session = 0; // incremented to cancel a running conversation
+let interruptToListen = false; // set when the user taps the button while the app is talking
 let wakeLock = null;
 
 const STOP_WORDS = /^(stop|stop stop|slut|farvel|det var det|det var alt|tak det var det|nej tak|ellers tak)\.?$/i;
 const UNDO_WORDS = /^(fortryd|fortryd det|fortryd sidste)\.?$/i;
 const DIALOG_TTL_MS = 15 * 60 * 1000;
+
+const voiceSettings = () => ({ ...settings, azureKey: secrets.azureKey });
+const say = (text) => speak(text, voiceSettings());
+
+// ---------- Saving ----------
+
+function persist() {
+  saveData(data);
+  renderThreads();
+  syncReminders(() => data, settings.home, fireRemindersInApp);
+  const hasReminders = data.reminders.some((r) => !r.done);
+  if (!isNative && hasReminders && "Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+function commit(mutator) {
+  undoStack.push(structuredClone(data));
+  undoStack = undoStack.slice(-20);
+  mutator();
+  persist();
+}
+
+function undo() {
+  const previous = undoStack.pop();
+  if (!previous) return false;
+  data = previous;
+  persist();
+  showChanges([]);
+  return true;
+}
+
+function markRemindersDone(ids) {
+  if (!ids.length) return;
+  for (const r of data.reminders) if (ids.includes(r.id)) r.done = true;
+  persist();
+}
+
+// Web version only: reminders that become due while the app is open.
+async function fireRemindersInApp(due) {
+  markRemindersDone(due.map((r) => r.id));
+  for (const r of due) {
+    if ("Notification" in window && Notification.permission === "granted") new Notification("Tankemakker", { body: r.text });
+  }
+  showReply(due.map((r) => `Påmindelse: ${r.text}`).join(" "));
+  if (document.body.dataset.mode === "idle") await say(due.map((r) => `Påmindelse: ${r.text}`).join(". "));
+}
 
 // ---------- Talk view ----------
 
@@ -37,10 +87,8 @@ function showChanges(changed) {
   const box = $("#changes");
   box.innerHTML = "";
   for (const c of changed) {
-    const chip = document.createElement("button");
-    chip.className = "chip";
-    chip.textContent = c.label;
-    chip.onclick = () => openThread(c.id);
+    const chip = element("button", { className: "chip", textContent: c.label });
+    chip.onclick = () => (c.threadId ? openThread(c.threadId) : showView("threads"));
     box.append(chip);
   }
   $("#undo").hidden = undoStack.length === 0;
@@ -59,16 +107,6 @@ function releaseWakeLock() {
   wakeLock = null;
 }
 
-function undo() {
-  const previous = undoStack.pop();
-  if (!previous) return false;
-  data = previous;
-  saveData(data);
-  renderThreads();
-  showChanges([]);
-  return true;
-}
-
 async function handleUtterance(text, mySession) {
   if (Date.now() - lastTurnAt > DIALOG_TTL_MS) dialog = [];
   lastTurnAt = Date.now();
@@ -79,7 +117,7 @@ async function handleUtterance(text, mySession) {
     return { reply, expectsAnswer: false };
   }
 
-  if (!apiKey) {
+  if (!secrets.apiKey) {
     const reply = "Du mangler at indtaste en API-nøgle under Indstillinger.";
     showReply(reply);
     return { reply, expectsAnswer: false };
@@ -87,9 +125,10 @@ async function handleUtterance(text, mySession) {
 
   setStatus("Tænker…", "thinking");
   const result = await askAssistant({
-    apiKey,
+    apiKey: secrets.apiKey,
     model: settings.model,
-    threads: data.threads,
+    data,
+    homeIsSet: Boolean(settings.home),
     dialog,
     utterance: text,
   });
@@ -100,8 +139,7 @@ async function handleUtterance(text, mySession) {
     undoStack = undoStack.slice(-20);
     const applied = applyActions(data, result.actions, text);
     data = applied.data;
-    saveData(data);
-    renderThreads();
+    persist();
     showChanges(applied.changed);
   } else {
     showChanges([]);
@@ -118,31 +156,35 @@ async function conversation() {
   await acquireWakeLock();
   try {
     while (mySession === session) {
-      setStatus("Lytter…", "listening");
+      setStatus("Lytter… (tal bare, jeg venter på pauser)", "listening");
       showTranscript("");
-      const text = await listenOnce({ onInterim: showTranscript });
+      const text = await listen({ onInterim: showTranscript });
       if (mySession !== session) return;
       if (!text) break;
       showTranscript(text);
 
       if (STOP_WORDS.test(text)) {
         setStatus("Taler…", "speaking");
-        await speak("Okay, vi snakkes ved.", settings.voiceURI);
+        await say("Okay, vi snakkes ved.");
         break;
       }
 
       const outcome = await handleUtterance(text, mySession);
       if (!outcome) return;
-      setStatus("Taler…", "speaking");
-      await speak(outcome.reply, settings.voiceURI);
+      setStatus("Taler… (tryk for at afbryde)", "speaking");
+      await say(outcome.reply);
       if (mySession !== session) return;
+      if (interruptToListen) {
+        interruptToListen = false;
+        continue;
+      }
       if (!settings.conversationMode && !outcome.expectsAnswer) break;
     }
   } catch (err) {
     if (mySession !== session) return;
     const message = describeError(err);
     showReply(message);
-    await speak(message, settings.voiceURI);
+    await say(message);
   } finally {
     if (mySession === session) {
       setStatus("Tryk for at tale", "idle");
@@ -153,6 +195,7 @@ async function conversation() {
 
 function cancelConversation() {
   session++;
+  interruptToListen = false;
   stopListening();
   stopSpeaking();
   releaseWakeLock();
@@ -160,8 +203,13 @@ function cancelConversation() {
 }
 
 $("#mic").onclick = () => {
-  if (document.body.dataset.mode === "idle") conversation();
-  else cancelConversation();
+  const mode = document.body.dataset.mode;
+  if (mode === "idle") conversation();
+  else if (mode === "speaking") {
+    // Interrupt the answer and listen straight away, e.g. to correct something.
+    interruptToListen = true;
+    stopSpeaking();
+  } else cancelConversation();
 };
 
 $("#undo").onclick = () => {
@@ -206,14 +254,32 @@ function element(tag, props = {}, ...children) {
   return el;
 }
 
-function commit(mutator) {
-  undoStack.push(structuredClone(data));
-  mutator();
-  saveData(data);
-  renderThreads();
+function renderReminderItem(r) {
+  const remove = element("button", { className: "small", textContent: "Fjern", type: "button" });
+  remove.onclick = () => commit(() => { data.reminders.find((x) => x.id === r.id).done = true; });
+  return element("li", { className: "reminder" },
+    element("div", {},
+      element("div", { textContent: r.text }),
+      element("div", { className: "note-meta", textContent: `⏰ ${describeWhen(r)}` }),
+    ),
+    remove,
+  );
+}
+
+function renderReminders() {
+  const active = data.reminders
+    .filter((r) => !r.done)
+    .sort((a, b) => (a.at || "9").localeCompare(b.at || "9"));
+  const box = $("#reminder-list");
+  box.innerHTML = "";
+  $("#reminders").hidden = active.length === 0;
+  for (const r of active) box.append(renderReminderItem(r));
+  const needsHome = active.some((r) => r.when !== "time") && !settings.home;
+  $("#home-missing").hidden = !needsHome;
 }
 
 function renderThreads() {
+  renderReminders();
   const list = $("#thread-list");
   const query = $("#search").value.trim().toLowerCase();
   const showArchived = $("#show-archived").checked;
@@ -232,18 +298,34 @@ function renderThreads() {
   for (const t of threads) list.append(renderThread(t));
 }
 
+function renderChecklist(t) {
+  const list = element("ul", { className: "checklist" });
+  t.checklist.forEach((item, index) => {
+    const box = element("input", { type: "checkbox", checked: item.done });
+    box.onchange = () => commit(() => {
+      data.threads.find((x) => x.id === t.id).checklist[index].done = box.checked;
+    });
+    list.append(element("li", { className: item.done ? "done" : "" }, element("label", { className: "inline" }, box, item.text)));
+  });
+  return list;
+}
+
 function renderThread(t) {
   const details = element("details", { className: "thread", id: `thread-${t.id}` });
+  const openItems = t.checklist.filter((c) => !c.done).length;
   details.append(
     element("summary", {},
       element("span", { className: "thread-title", textContent: t.title }),
-      element("span", { className: "thread-ago", textContent: formatAgo(t.updatedAt) }),
+      element("span", { className: "thread-ago", textContent: `${openItems ? `☐ ${openItems} · ` : ""}${formatAgo(t.updatedAt)}` }),
     ),
     element("p", { className: "thread-status", textContent: t.status || "Ingen status endnu." }),
   );
 
-  if (t.nextSteps.length) {
-    details.append(element("h4", { textContent: "Næste skridt" }), element("ul", {}, ...t.nextSteps.map((s) => element("li", { textContent: s }))));
+  if (t.checklist.length) details.append(element("h4", { textContent: "Huskeliste" }), renderChecklist(t));
+
+  const reminders = data.reminders.filter((r) => !r.done && r.threadId === t.id);
+  if (reminders.length) {
+    details.append(element("h4", { textContent: "Påmindelser" }), element("ul", { className: "reminders" }, ...reminders.map(renderReminderItem)));
   }
 
   details.append(element("h4", { textContent: `Noter (${t.notes.length})` }));
@@ -309,16 +391,15 @@ function openThread(id) {
 
 $("#search").oninput = renderThreads;
 $("#show-archived").onchange = renderThreads;
+$("#home-missing-go").onclick = () => showView("settings");
 
 // ---------- Settings view ----------
 
 function renderSettings() {
-  $("#key-status").textContent = settings.encryptedKey
-    ? "✓ Nøglen er gemt og låst med din adgangskode."
-    : settings.apiKey
-      ? "Nøglen er gemt, men uden adgangskode."
-      : "Ingen nøgle gemt endnu.";
-  $("#lock-now").hidden = !settings.encryptedKey;
+  const locked = Boolean(settings.encryptedKey);
+  const saved = (key) => (key ? (locked ? "gemt og låst med adgangskode" : "gemt uden adgangskode") : "ikke gemt");
+  $("#key-status").textContent = `API-nøgle: ${saved(secrets.apiKey)}. Azure-nøgle: ${saved(secrets.azureKey)}.`;
+  $("#lock-now").hidden = !locked;
   $("#key-message").textContent = "";
   $("#conversation-mode").checked = settings.conversationMode;
 
@@ -327,12 +408,27 @@ function renderSettings() {
     $("#model").append(element("option", { value: id, textContent: label, selected: id === settings.model }));
   }
 
+  $("#tts-provider").value = settings.ttsProvider;
+  $("#azure-region").value = settings.azureRegion;
+  $("#azure-voice").innerHTML = "";
+  for (const [id, label] of Object.entries(AZURE_VOICES)) {
+    $("#azure-voice").append(element("option", { value: id, textContent: label, selected: id === settings.azureVoice }));
+  }
+  $("#azure-settings").hidden = settings.ttsProvider !== "azure";
+
   const voices = getDanishVoices();
+  $("#device-voice-row").hidden = settings.ttsProvider !== "device" || isNative;
   $("#voice").innerHTML = "";
   if (voices.length === 0) $("#voice").append(element("option", { value: "", textContent: "Standard (ingen dansk stemme fundet)" }));
   for (const v of voices) {
     $("#voice").append(element("option", { value: v.voiceURI, textContent: v.name, selected: v.voiceURI === settings.voiceURI }));
   }
+
+  $("#home-status").textContent = settings.home
+    ? "✓ Hjem er indstillet. Tryk igen, hvis du flytter."
+    : "Ikke indstillet. Tryk på knappen, næste gang du er hjemme.";
+  $("#home-clear").hidden = !settings.home;
+  $("#location-permission").hidden = !isNative;
 }
 
 function updateSettings(patch) {
@@ -342,10 +438,17 @@ function updateSettings(patch) {
 
 $("#key-form").onsubmit = async (event) => {
   event.preventDefault();
-  const newKey = $("#api-key").value.trim() || apiKey;
+  const next = {
+    apiKey: $("#api-key").value.trim() || secrets.apiKey,
+    azureKey: $("#azure-key").value.trim() || secrets.azureKey,
+  };
   const password = $("#key-password").value;
-  if (!newKey) {
+  if (!next.apiKey) {
     $("#key-message").textContent = "Indsæt først din API-nøgle.";
+    return;
+  }
+  if (settings.encryptedKey && !password) {
+    $("#key-message").textContent = "Skriv din adgangskode (eller en ny) for at gemme ændringen.";
     return;
   }
   if (password && password.length < 4) {
@@ -353,15 +456,14 @@ $("#key-form").onsubmit = async (event) => {
     return;
   }
   if (password) {
-    updateSettings({ apiKey: "", encryptedKey: await encryptSecret(newKey, password) });
-    rememberUnlocked(newKey);
+    updateSettings({ apiKey: "", azureKey: "", encryptedKey: await encryptSecret(JSON.stringify(next), password) });
+    rememberUnlocked(JSON.stringify(next));
   } else {
-    updateSettings({ apiKey: newKey, encryptedKey: null });
+    updateSettings({ ...next, encryptedKey: null });
     forgetUnlocked();
   }
-  apiKey = newKey;
-  $("#api-key").value = "";
-  $("#key-password").value = "";
+  secrets = next;
+  for (const id of ["#api-key", "#azure-key", "#key-password"]) $(id).value = "";
   renderSettings();
   $("#key-message").textContent = "Gemt.";
 };
@@ -370,9 +472,46 @@ $("#lock-now").onclick = lockApp;
 
 $("#model").onchange = (e) => updateSettings({ model: e.target.value });
 $("#voice").onchange = (e) => updateSettings({ voiceURI: e.target.value });
+$("#tts-provider").onchange = (e) => {
+  updateSettings({ ttsProvider: e.target.value });
+  renderSettings();
+};
+$("#azure-region").onchange = (e) => updateSettings({ azureRegion: e.target.value });
+$("#azure-voice").onchange = (e) => updateSettings({ azureVoice: e.target.value });
 $("#conversation-mode").onchange = (e) => updateSettings({ conversationMode: e.target.checked });
-$("#test-voice").onclick = () => speak("Hej. Sådan lyder jeg, når jeg læser dine tråde op.", settings.voiceURI);
-if (canSpeak) speechSynthesis.onvoiceschanged = renderSettings;
+$("#test-voice").onclick = () => say("Hej. Sådan lyder jeg, når jeg læser dine tråde op.");
+if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = renderSettings;
+
+$("#home-set").onclick = async () => {
+  $("#home-status").textContent = "Finder din position…";
+  try {
+    const pos = await getCurrentPosition();
+    updateSettings({ home: { lat: pos.lat, lng: pos.lng } });
+    renderSettings();
+    $("#home-status").textContent += ` (præcision ca. ${Math.round(pos.accuracy)} m)`;
+    persist();
+  } catch (err) {
+    $("#home-status").textContent = err.message;
+  }
+};
+
+$("#home-clear").onclick = () => {
+  updateSettings({ home: null });
+  renderSettings();
+  persist();
+};
+
+$("#location-permission").onclick = async () => {
+  try {
+    const status = await requestNativePermissions();
+    $("#home-status").textContent = status.background
+      ? "✓ Appen må bruge din placering hele tiden."
+      : "Appen mangler adgang til placering 'hele tiden'. Vælg det under Tilladelser → Placering.";
+    persist();
+  } catch (err) {
+    $("#home-status").textContent = err.message;
+  }
+};
 
 $("#export").onclick = () => {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -388,7 +527,7 @@ $("#import").onchange = async (e) => {
     const imported = JSON.parse(await file.text());
     if (!Array.isArray(imported.threads)) throw new Error();
     if (confirm(`Erstat dine nuværende tråde med ${imported.threads.length} tråde fra filen?`)) {
-      commit(() => { data = imported; });
+      commit(() => { data = migrateData(imported); });
     }
   } catch {
     alert("Filen kunne ikke læses som en Tankemakker-sikkerhedskopi.");
@@ -397,12 +536,12 @@ $("#import").onchange = async (e) => {
 };
 
 $("#wipe").onclick = () => {
-  if (confirm("Slet ALLE tråde og noter? Det kan fortrydes med Fortryd-knappen, indtil du lukker appen.")) {
-    commit(() => { data = { threads: [] }; });
+  if (confirm("Slet ALLE tråde, noter og påmindelser? Det kan fortrydes med Fortryd-knappen, indtil du lukker appen.")) {
+    commit(() => { data = migrateData({}); });
   }
 };
 
-// ---------- Navigation & startup ----------
+// ---------- Navigation ----------
 
 function showView(name) {
   for (const view of document.querySelectorAll(".view")) view.hidden = view.id !== `view-${name}`;
@@ -412,19 +551,19 @@ function showView(name) {
 
 for (const tab of document.querySelectorAll("nav button")) tab.onclick = () => showView(tab.dataset.view);
 
-if (!canListen) {
-  $("#mic").disabled = true;
-  setStatus("Talegenkendelse virker ikke i denne browser. Brug Chrome, eller skriv nedenfor.", "idle");
-} else {
-  setStatus("Tryk for at tale", "idle");
-}
+// ---------- Lock screen & startup ----------
 
-// ---------- Lock screen ----------
+// Older versions stored only the Anthropic key as the secret.
+function parseSecrets(text) {
+  if (!text) return { apiKey: "", azureKey: "" };
+  if (text.trim().startsWith("{")) return { apiKey: "", azureKey: "", ...JSON.parse(text) };
+  return { apiKey: text, azureKey: "" };
+}
 
 function lockApp() {
   cancelConversation();
   forgetUnlocked();
-  apiKey = "";
+  secrets = { apiKey: "", azureKey: "" };
   $("#unlock-password").value = "";
   $("#unlock-message").textContent = "";
   document.body.classList.add("locked");
@@ -432,36 +571,62 @@ function lockApp() {
   $("#unlock-password").focus();
 }
 
+async function checkFiredReminders() {
+  markRemindersDone(await collectFired(data));
+}
+
 function start() {
   document.body.classList.remove("locked");
   $("#lock").hidden = true;
-  renderThreads();
-  showView(apiKey ? "talk" : "settings");
+  persist();
+  checkFiredReminders();
+  showView(secrets.apiKey ? "talk" : "settings");
   // Opened via the "Tal nu" shortcut: start listening straight away.
-  if (canListen && apiKey && new URLSearchParams(location.search).has("lyt")) conversation();
+  if (canListen && secrets.apiKey && new URLSearchParams(location.search).has("lyt")) conversation();
 }
 
 $("#unlock-form").onsubmit = async (event) => {
   event.preventDefault();
   $("#unlock-message").textContent = "Låser op…";
-  const key = await decryptSecret(settings.encryptedKey, $("#unlock-password").value);
-  if (!key) {
+  const text = await decryptSecret(settings.encryptedKey, $("#unlock-password").value);
+  if (!text) {
     $("#unlock-message").textContent = "Forkert adgangskode.";
     $("#unlock-password").select();
     return;
   }
-  apiKey = key;
-  rememberUnlocked(key);
+  secrets = parseSecrets(text);
+  rememberUnlocked(text);
   start();
 };
 
 $("#forgot").onclick = () => {
-  if (!confirm("Fjern den gemte API-nøgle? Dine tråde bliver ikke slettet, men du skal indsætte nøglen igen.")) return;
-  updateSettings({ apiKey: "", encryptedKey: null });
+  if (!confirm("Fjern de gemte nøgler? Dine tråde bliver ikke slettet, men du skal indsætte nøglerne igen.")) return;
+  updateSettings({ apiKey: "", azureKey: "", encryptedKey: null });
+  secrets = { apiKey: "", azureKey: "" };
   start();
 };
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if (!canListen) {
+  $("#mic").disabled = true;
+  setStatus("Talegenkendelse virker ikke i denne browser. Brug Chrome, eller skriv nedenfor.", "idle");
+} else {
+  setStatus("Tryk for at tale", "idle");
+}
+if (!canSpeak) $("#test-voice").disabled = true;
 
-if (settings.encryptedKey && !apiKey) lockApp();
-else start();
+if (isNative) {
+  App.addListener("resume", checkFiredReminders);
+} else if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
+if (settings.encryptedKey) {
+  const remembered = recallUnlocked();
+  if (remembered) {
+    secrets = parseSecrets(remembered);
+    start();
+  } else lockApp();
+} else {
+  secrets = { apiKey: settings.apiKey, azureKey: settings.azureKey };
+  start();
+}

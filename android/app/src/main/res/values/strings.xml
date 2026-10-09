@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Tankemakker</string>
+    <string name="title_activity_main">Tankemakker</string>
+    <string name="package_name">dk.roennemoesgaard.tankemakker</string>
+    <string name="custom_url_scheme">dk.roennemoesgaard.tankemakker</string>
+</resources>
