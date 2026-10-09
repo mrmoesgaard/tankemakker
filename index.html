@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f2a44">
+  <title>Tankemakker</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-mode="idle">
+  <header>
+    <h1>Tankemakker</h1>
+    <nav>
+      <button data-view="talk" class="active">Tal</button>
+      <button data-view="threads">Tråde</button>
+      <button data-view="settings">Indstillinger</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-talk" class="view">
+      <p id="status" class="status">Tryk for at tale</p>
+      <button id="mic" class="mic" aria-label="Tal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+      </button>
+      <p id="transcript" class="transcript"></p>
+      <p id="reply" class="reply"></p>
+      <div id="changes" class="changes"></div>
+      <button id="undo" class="small" hidden>Fortryd sidste</button>
+      <form id="text-form" class="text-form">
+        <input id="text-input" type="text" placeholder="…eller skriv en tanke her" autocomplete="off">
+        <button type="submit">Send</button>
+      </form>
+      <p class="hint">Sig f.eks. "Jeg har en idé til hytten…", "Hvor var jeg med hytten?" eller "Hvad har jeg gang i?". Sig "fortryd", hvis noget havnede forkert, og "stop", når du er færdig.</p>
+    </section>
+
+    <section id="view-threads" class="view" hidden>
+      <div id="reminders" class="reminders-box" hidden>
+        <h3>Påmindelser</h3>
+        <ul id="reminder-list" class="reminders"></ul>
+        <p id="home-missing" class="hint" hidden>Du har påmindelser til, når du kommer hjem, men appen ved ikke, hvor du bor endnu. <button id="home-missing-go" class="link" type="button">Indstil hjem</button></p>
+      </div>
+      <div class="thread-tools">
+        <input id="search" type="search" placeholder="Søg i trådene">
+        <label class="inline"><input id="show-archived" type="checkbox"> Vis arkiverede</label>
+      </div>
+      <div id="thread-list"></div>
+    </section>
+
+    <section id="view-settings" class="view" hidden>
+      <h3>Nøgler</h3>
+      <p id="key-status" class="key-status"></p>
+      <form id="key-form" class="stack">
+        <label>API-nøgle fra Anthropic
+          <input id="api-key" type="password" placeholder="sk-ant-… (tom = behold den gemte)" autocomplete="off">
+        </label>
+        <label>Azure-nøgle til stemmen (valgfri)
+          <input id="azure-key" type="password" placeholder="Key 1 fra Azure (tom = behold den gemte)" autocomplete="off">
+        </label>
+        <label>Adgangskode til appen
+          <input id="key-password" type="password" placeholder="Anbefales – mindst 4 tegn" autocomplete="new-password">
+        </label>
+        <p class="hint">Med en adgangskode gemmes nøglerne krypteret, og appen beder om koden, hver gang den er blevet lukket. Nøglerne gemmes kun på denne telefon.</p>
+        <div class="row">
+          <button type="submit">Gem</button>
+          <button id="lock-now" class="small" type="button" hidden>Lås appen nu</button>
+        </div>
+        <p id="key-message" class="hint" aria-live="polite"></p>
+      </form>
+
+      <h3>Stemme</h3>
+      <label>Hvem skal tale?
+        <select id="tts-provider">
+          <option value="device">Telefonens egen stemme</option>
+          <option value="azure">Azure (naturlig stemme)</option>
+        </select>
+      </label>
+      <div id="azure-settings" class="stack" hidden>
+        <label>Azure-stemme
+          <select id="azure-voice"></select>
+        </label>
+        <label>Azure-region
+          <select id="azure-region">
+            <option value="northeurope">North Europe</option>
+            <option value="westeurope">West Europe</option>
+            <option value="swedencentral">Sweden Central</option>
+          </select>
+        </label>
+      </div>
+      <label id="device-voice-row">Telefonstemme
+        <select id="voice"></select>
+      </label>
+      <button id="test-voice" class="small" type="button">Afprøv stemmen</button>
+      <label class="inline"><input id="conversation-mode" type="checkbox"> Samtaletilstand: bliv ved med at lytte efter hvert svar, indtil jeg siger "stop"</label>
+
+      <h3>Hjem</h3>
+      <p id="home-status" class="hint"></p>
+      <div class="row">
+        <button id="home-set" class="small" type="button">Jeg er hjemme nu</button>
+        <button id="home-clear" class="small danger" type="button" hidden>Glem hjem</button>
+        <button id="location-permission" class="small" type="button" hidden>Giv adgang til placering</button>
+      </div>
+      <p class="hint">Bruges til påmindelser som "mind mig om det, når jeg er hjemme". Din position gemmes kun på telefonen.</p>
+
+      <h3>AI-model</h3>
+      <label>Model
+        <select id="model"></select>
+      </label>
+
+      <h3>Dine data</h3>
+      <p class="hint">Trådene gemmes kun på denne telefon. Tag en sikkerhedskopi en gang imellem.</p>
+      <div class="row">
+        <button id="export" class="small" type="button">Gem sikkerhedskopi</button>
+        <label class="small button-like">Indlæs sikkerhedskopi<input id="import" type="file" accept="application/json" hidden></label>
+        <button id="wipe" class="small danger" type="button">Slet alt</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="lock" class="lock" hidden>
+    <form id="unlock-form" class="lock-box">
+      <img src="icon.svg" alt="" width="72" height="72">
+      <h2>Tankemakker er låst</h2>
+      <input id="unlock-password" type="password" placeholder="Adgangskode" autocomplete="current-password" aria-label="Adgangskode">
+      <button type="submit">Lås op</button>
+      <p id="unlock-message" class="hint" aria-live="polite"></p>
+      <button id="forgot" class="link" type="button">Glemt adgangskoden?</button>
+    </form>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
